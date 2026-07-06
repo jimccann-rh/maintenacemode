@@ -1,0 +1,55 @@
+---
+# Quick test playbook to verify datetime calculations work
+- name: Test DateTime Calculations
+  hosts: localhost
+  gather_facts: yes
+  vars:
+    ansible_python_interpreter: auto_silent
+    enter_maintenance_datetime: "2026-07-07 02:00:00"
+    exit_maintenance_datetime: "2026-07-07 08:00:00"
+
+  tasks:
+    - name: Display current time
+      debug:
+        msg:
+          - "Current time (ISO): {{ ansible_date_time.iso8601 }}"
+          - "Current time (epoch): {{ ansible_date_time.epoch }}"
+          - "Current time (human): {{ ansible_date_time.date }} {{ ansible_date_time.time }}"
+          - "Scheduled entry: {{ enter_maintenance_datetime }}"
+          - "Scheduled exit: {{ exit_maintenance_datetime }}"
+
+    - name: Convert maintenance start time to epoch
+      shell: date -d "{{ enter_maintenance_datetime }}" +%s
+      register: maintenance_start_epoch
+      delegate_to: localhost
+
+    - name: Calculate seconds until maintenance mode entry
+      set_fact:
+        seconds_until_maintenance: "{{ (maintenance_start_epoch.stdout | int) - (ansible_date_time.epoch | int) }}"
+
+    - name: Display calculation results
+      debug:
+        msg:
+          - "Maintenance start epoch: {{ maintenance_start_epoch.stdout }}"
+          - "Current epoch: {{ ansible_date_time.epoch }}"
+          - "Seconds until maintenance entry: {{ seconds_until_maintenance }}"
+          - "Hours until maintenance entry: {{ (seconds_until_maintenance | int / 3600) | round(2) }}"
+          - "Minutes until maintenance entry: {{ (seconds_until_maintenance | int / 60) | round(0) }}"
+          - "Will wait: {{ 'YES' if seconds_until_maintenance | int > 0 else 'NO (time already passed)' }}"
+
+    - name: Convert exit check time to epoch
+      shell: date -d "{{ exit_maintenance_datetime }}" +%s
+      register: exit_check_epoch
+      delegate_to: localhost
+
+    - name: Calculate seconds until exit check time
+      set_fact:
+        seconds_until_exit_check: "{{ (exit_check_epoch.stdout | int) - (ansible_date_time.epoch | int) }}"
+
+    - name: Display exit calculation results
+      debug:
+        msg:
+          - "Exit check epoch: {{ exit_check_epoch.stdout }}"
+          - "Seconds until exit check: {{ seconds_until_exit_check }}"
+          - "Hours until exit check: {{ (seconds_until_exit_check | int / 3600) | round(2) }}"
+          - "Minutes until exit check: {{ (seconds_until_exit_check | int / 60) | round(0) }}"

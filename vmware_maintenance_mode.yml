@@ -1,0 +1,378 @@
+---
+- name: VMware Host Maintenance Mode Management
+  hosts: localhost
+  gather_facts: yes
+  vars:
+    ansible_python_interpreter: auto_silent
+    # VMware ESXi host configuration
+    esxi_hostname: "esxi-host.example.com"
+
+    # vCenter configuration
+    vcenter_hostname: "vcenter.example.com"
+    vcenter_username: "administrator@vsphere.local"
+    vcenter_password: "{{ vault_vcenter_password }}"  # Use ansible-vault for security
+    vcenter_datacenter: "Datacenter"
+    vcenter_cluster: "Cluster"  # Optional: specify cluster name
+    vcenter_validate_certs: no
+
+    # Maintenance mode scheduling
+    # Format: "YYYY-MM-DD HH:MM:SS" (24-hour format)
+    enter_maintenance_datetime: "2026-07-06 22:00:00"
+
+    # VSAN evacuation mode: "ensureObjectAccessibility" or "evacuateAllData" or "noAction"
+    # ensureObjectAccessibility: Minimal data movement, faster (DEFAULT)
+    # evacuateAllData: Full data migration, slower but safer
+    # noAction: No data evacuation
+    vsan_evacuation_mode: "ensureObjectAccessibility"
+
+    # Host action after entering maintenance mode
+    # Options: "none", "reboot", "shutdown"
+    # "none" - No action, just enter maintenance mode (DEFAULT)
+    # "reboot" - Reboot the host after 15 minutes in maintenance mode
+    # "shutdown" - Shutdown the host after 15 minutes in maintenance mode
+    host_action: "none"
+
+    # Delay before performing host action (in seconds)
+    host_action_delay: 900  # 15 minutes
+
+    # Delay after entering maintenance mode (in hours)
+    # Only used if host_action is "none"
+    post_maintenance_delay_hours: 4
+
+    # Exit maintenance mode scheduling
+    # Format: "YYYY-MM-DD HH:MM:SS" (24-hour format)
+    exit_maintenance_datetime: "2026-07-07 03:00:00"
+
+    # Timeouts and retries
+    ssh_check_timeout: 300  # seconds
+    vcenter_check_timeout: 600  # seconds
+    vcenter_reconnect_delay: 900  # 15 minutes in seconds
+    exit_maintenance_retry_timeout: 3600  # 1 hour retry window for exiting maintenance mode
+    exit_maintenance_retry_delay: 60  # seconds between retry attempts
+
+  tasks:
+    - name: Display configuration
+      debug:
+        msg:
+          - "=========================================="
+          - "VMware Maintenance Mode Configuration"
+          - "=========================================="
+          - "ESXi Host: {{ esxi_hostname }}"
+          - "vCenter: {{ vcenter_hostname }}"
+          - "Datacenter: {{ vcenter_datacenter }}"
+          - "Cluster: {{ vcenter_cluster }}"
+          - "Enter Maintenance: {{ enter_maintenance_datetime }}"
+          - "VSAN Evacuation Mode: {{ vsan_evacuation_mode }}"
+          - "Host Action: {{ host_action | upper }}"
+          - "{% if host_action != 'none' %}Host Action Delay: {{ host_action_delay }} seconds ({{ (host_action_delay / 60) | int }} minutes){% endif %}"
+          - "{% if host_action == 'none' %}Post-Maintenance Delay: {{ post_maintenance_delay_hours }} hours{% endif %}"
+          - "Exit Maintenance Check: {{ exit_maintenance_datetime }}"
+          - "=========================================="
+
+    - name: "PREREQUISITE CHECK: Verify SSH connectivity to ESXi host"
+      wait_for:
+        host: "{{ esxi_hostname }}"
+        port: 22
+        timeout: 30
+        state: started
+      register: ssh_precheck
+      delegate_to: localhost
+      failed_when: false
+
+    - name: Fail if SSH connection to ESXi host is not available
+      fail:
+        msg: "FAILED: Cannot connect to SSH port 22 on {{ esxi_hostname }}. Check network connectivity and SSH service status."
+      when: ssh_precheck is failed
+
+    - name: Display SSH connectivity status
+      debug:
+        msg: "✓ SSH connection to {{ esxi_hostname }}:22 is working"
+
+    - name: "PREREQUISITE CHECK: Verify vCenter API connectivity"
+      community.vmware.vmware_host_config_info:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        esxi_hostname: "{{ esxi_hostname }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+      register: vcenter_precheck
+      delegate_to: localhost
+      failed_when: false
+
+    - name: Fail if vCenter connection is not available
+      fail:
+        msg: "FAILED: Cannot connect to vCenter {{ vcenter_hostname }} or host {{ esxi_hostname }} not found. Check credentials and network connectivity."
+      when: vcenter_precheck is failed
+
+    - name: Display vCenter connectivity status
+      debug:
+        msg:
+          - "✓ vCenter API connection to {{ vcenter_hostname }} is working"
+          - "✓ ESXi host {{ esxi_hostname }} is visible in vCenter"
+          - "  Host info retrieved successfully"
+
+    - name: Display prerequisite check summary
+      debug:
+        msg:
+          - "=========================================="
+          - "✓ All prerequisite checks passed"
+          - "✓ Ready to begin scheduled maintenance"
+          - "=========================================="
+
+    - name: Convert maintenance start time to epoch
+      shell: date -d "{{ enter_maintenance_datetime }}" +%s
+      register: maintenance_start_epoch
+      delegate_to: localhost
+
+    - name: Calculate seconds until maintenance mode entry
+      set_fact:
+        seconds_until_maintenance: "{{ (maintenance_start_epoch.stdout | int) - (ansible_date_time.epoch | int) }}"
+
+    - name: Display wait information
+      debug:
+        msg:
+          - "=========================================="
+          - "Waiting for Scheduled Maintenance Time"
+          - "=========================================="
+          - "Current Time: {{ ansible_date_time.date }} {{ ansible_date_time.time }}"
+          - "Scheduled Start: {{ enter_maintenance_datetime }}"
+          - "Seconds to Wait: {{ seconds_until_maintenance }}"
+          - "Hours to Wait: {{ (seconds_until_maintenance | int / 3600) | round(2) }}"
+          - "Minutes to Wait: {{ (seconds_until_maintenance | int / 60) | round(0) }}"
+          - "=========================================="
+      when: seconds_until_maintenance | int > 0
+
+    - name: Wait until scheduled maintenance time
+      wait_for:
+        timeout: "{{ seconds_until_maintenance }}"
+      when: seconds_until_maintenance | int > 0
+      delegate_to: localhost
+
+    - name: Enter maintenance mode via vCenter API
+      vmware.vmware.esxi_maintenance_mode:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        esxi_host_name: "{{ esxi_hostname }}"
+        enable_maintenance_mode: true
+        vsan_compliance_mode: "{{ vsan_evacuation_mode }}"
+        evacuate: yes
+        timeout: 3600
+        validate_certs: "{{ vcenter_validate_certs }}"
+      register: enter_maintenance_result
+      delegate_to: localhost
+
+    - name: Verify maintenance mode entry
+      vmware.vmware.cluster_info:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+      register: maintenance_status
+      retries: 5
+      delay: 10
+      delegate_to: localhost
+
+    - name: Display maintenance mode status
+      debug:
+        msg: "Host {{ esxi_hostname }} successfully entered maintenance mode at {{ ansible_date_time.iso8601 }}"
+
+    - name: Wait before performing host action
+      wait_for:
+        timeout: "{{ host_action_delay }}"
+      when: host_action != "none"
+      delegate_to: localhost
+
+    - name: Display reboot notification
+      debug:
+        msg:
+          - "=========================================="
+          - "Rebooting ESXi Host"
+          - "=========================================="
+          - "Host: {{ esxi_hostname }}"
+          - "Action: REBOOT"
+          - "Time: {{ ansible_date_time.iso8601 }}"
+          - "=========================================="
+      when: host_action == "reboot"
+
+    - name: Reboot ESXi host via vCenter
+      community.vmware.vmware_host_powerstate:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        esxi_hostname: "{{ esxi_hostname }}"
+        state: reboot-host
+        validate_certs: "{{ vcenter_validate_certs }}"
+      when: host_action == "reboot"
+      register: reboot_result
+      delegate_to: localhost
+
+    - name: Display shutdown notification
+      debug:
+        msg:
+          - "=========================================="
+          - "Shutting Down ESXi Host"
+          - "=========================================="
+          - "Host: {{ esxi_hostname }}"
+          - "Action: SHUTDOWN"
+          - "Time: {{ ansible_date_time.iso8601 }}"
+          - "=========================================="
+      when: host_action == "shutdown"
+
+    - name: Shutdown ESXi host via vCenter
+      community.vmware.vmware_host_powerstate:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        esxi_hostname: "{{ esxi_hostname }}"
+        state: shutdown-host
+        validate_certs: "{{ vcenter_validate_certs }}"
+      when: host_action == "shutdown"
+      register: shutdown_result
+      delegate_to: localhost
+
+    - name: Wait for post-maintenance delay period
+      wait_for:
+        timeout: "{{ post_maintenance_delay_hours | int * 3600 }}"
+      when: host_action == "none"
+      delegate_to: localhost
+
+    - name: Convert exit check time to epoch
+      shell: date -d "{{ exit_maintenance_datetime }}" +%s
+      register: exit_check_epoch
+      delegate_to: localhost
+
+    - name: Calculate seconds until exit check time
+      set_fact:
+        seconds_until_exit_check: "{{ (exit_check_epoch.stdout | int) - (ansible_date_time.epoch | int) }}"
+
+    - name: Display exit check wait information
+      debug:
+        msg:
+          - "=========================================="
+          - "Waiting for Scheduled Exit Check Time"
+          - "=========================================="
+          - "Current Time: {{ ansible_date_time.date }} {{ ansible_date_time.time }}"
+          - "Scheduled Exit Check: {{ exit_maintenance_datetime }}"
+          - "Seconds to Wait: {{ seconds_until_exit_check }}"
+          - "Hours to Wait: {{ (seconds_until_exit_check | int / 3600) | round(2) }}"
+          - "Minutes to Wait: {{ (seconds_until_exit_check | int / 60) | round(0) }}"
+          - "=========================================="
+      when: seconds_until_exit_check | int > 0
+
+    - name: Wait until scheduled exit check time
+      wait_for:
+        timeout: "{{ seconds_until_exit_check }}"
+      when: seconds_until_exit_check | int > 0
+      delegate_to: localhost
+
+    - name: Check SSH connectivity to ESXi host
+      wait_for:
+        host: "{{ esxi_hostname }}"
+        port: 22
+        timeout: "{{ ssh_check_timeout }}"
+        state: started
+      register: ssh_check
+      delegate_to: localhost
+
+    - name: Display SSH connectivity status
+      debug:
+        msg: "SSH connection to {{ esxi_hostname }} is responding"
+
+    - name: Verify host is connected in vCenter
+      community.vmware.vmware_host_config_info:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        esxi_hostname: "{{ esxi_hostname }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+      register: vcenter_host_info
+      retries: 10
+      delay: 60
+      until: vcenter_host_info is succeeded
+      delegate_to: localhost
+
+    - name: Display vCenter connection status
+      debug:
+        msg:
+          - "Host {{ esxi_hostname }} is connected to vCenter"
+          - "Host configuration retrieved successfully"
+
+    - name: Wait 15 minutes before exiting maintenance mode
+      wait_for:
+        timeout: "{{ vcenter_reconnect_delay }}"
+      delegate_to: localhost
+
+    - name: Record exit maintenance start time
+      set_fact:
+        exit_maintenance_start_epoch: "{{ ansible_date_time.epoch }}"
+        exit_maintenance_deadline_epoch: "{{ (ansible_date_time.epoch | int) + (exit_maintenance_retry_timeout | int) }}"
+
+    - name: Display exit maintenance retry window
+      debug:
+        msg:
+          - "=========================================="
+          - "Attempting to Exit Maintenance Mode"
+          - "=========================================="
+          - "Retry Window: {{ exit_maintenance_retry_timeout }} seconds ({{ (exit_maintenance_retry_timeout / 60) | int }} minutes)"
+          - "Retry Interval: {{ exit_maintenance_retry_delay }} seconds"
+          - "Deadline: {{ exit_maintenance_deadline_epoch }}"
+          - "=========================================="
+
+    - name: Exit maintenance mode via vCenter API with retries
+      vmware.vmware.esxi_maintenance_mode:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        esxi_host_name: "{{ esxi_hostname }}"
+        enable_maintenance_mode: false
+        timeout: 3600
+        validate_certs: "{{ vcenter_validate_certs }}"
+      register: exit_maintenance_result
+      delegate_to: localhost
+      retries: "{{ (exit_maintenance_retry_timeout | int / exit_maintenance_retry_delay | int) | int }}"
+      delay: "{{ exit_maintenance_retry_delay }}"
+      until: exit_maintenance_result is succeeded
+      failed_when: false
+
+    - name: Display exit maintenance result
+      debug:
+        msg:
+          - "Exit Maintenance Result: {{ 'SUCCESS' if exit_maintenance_result is succeeded else 'FAILED' }}"
+          - "Attempts Made: {{ exit_maintenance_result.attempts | default(1) }}"
+          - "Time Elapsed: {{ (ansible_date_time.epoch | int) - (exit_maintenance_start_epoch | int) }} seconds"
+
+    - name: Fail if unable to exit maintenance mode
+      fail:
+        msg: "FAILED: Unable to exit maintenance mode after {{ exit_maintenance_retry_timeout }} seconds ({{ (exit_maintenance_retry_timeout / 60) | int }} minutes) of retrying."
+      when: exit_maintenance_result is failed
+
+    - name: Verify maintenance mode exit
+      community.vmware.vmware_host_config_info:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        esxi_hostname: "{{ esxi_hostname }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+      register: final_status
+      retries: 5
+      delay: 10
+      until: final_status is succeeded
+      delegate_to: localhost
+
+    - name: Display final status
+      debug:
+        msg: "Host {{ esxi_hostname }} successfully exited maintenance mode at {{ ansible_date_time.iso8601 }}"
+
+    - name: Send completion notification
+      debug:
+        msg:
+          - "=========================================="
+          - "Maintenance Mode Workflow Completed"
+          - "=========================================="
+          - "Host: {{ esxi_hostname }}"
+          - "Entered Maintenance: {{ enter_maintenance_datetime }}"
+          - "Exited Maintenance: {{ ansible_date_time.iso8601 }}"
+          - "Evacuation Mode Used: {{ vsan_evacuation_mode }}"
+          - "Total Runtime: Check logs for duration"

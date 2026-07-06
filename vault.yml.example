@@ -1,0 +1,6 @@
+---
+# Example vault file - DO NOT use this directly
+# Create your own encrypted vault with: ansible-vault create vault.yml
+# Then include it with: --extra-vars "@vault.yml"
+
+vault_vcenter_password: "your-secure-vcenter-password-here"
