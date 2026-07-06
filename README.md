@@ -88,6 +88,7 @@ Edit the variables in `vmware_maintenance_mode.yml`:
 # ESXi Host
 esxi_hostname: "esxi-host.example.com"
 autolookupip: false  # Set to true to lookup vmk0 IP from vCenter for SSH
+debug_mode: false    # Set to true to show detailed vmkernel info (for troubleshooting)
 
 # vCenter
 vcenter_hostname: "vcenter.example.com"
@@ -135,10 +136,20 @@ autolookupip: true
 ✓ ESXi host esxi01.example.com is visible in vCenter
 
 SSH Target: 192.168.1.100
-Auto-lookup enabled: Using vmk0 IP from vCenter
+Auto-lookup enabled: Using vmk0 IP (192.168.1.100) from vCenter
 
 ✓ SSH connection to 192.168.1.100:22 is working
 ```
+
+**Debug mode:**
+
+Enable detailed vmkernel adapter output for troubleshooting:
+```bash
+--extra-vars "autolookupip=true" \
+--extra-vars "debug_mode=true"
+```
+
+This will display the full vmkernel info structure, useful if vmk0 lookup fails.
 
 **Note:** Requires vCenter API access before SSH check (checks are now ordered: vCenter first, then SSH).
 

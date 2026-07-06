@@ -24,3 +24,4 @@ ansible-playbook vmware_maintenance_mode.yml \
 # --extra-vars "host_action=reboot"    # Reboot host after 15 minutes in maintenance mode
 # --extra-vars "host_action=shutdown"  # Shutdown host after 15 minutes in maintenance mode
 # --extra-vars "autolookupip=true"     # Auto-lookup vmk0 IP from vCenter for SSH checks
+# --extra-vars "debug_mode=true"       # Show detailed vmkernel adapter info (troubleshooting)

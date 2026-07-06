@@ -15,6 +15,9 @@
     # When enabled, looks up vmk0 IP from vCenter and uses it for SSH checks
     autolookupip: false
 
+    # Debug mode - shows detailed vmkernel info (default: false)
+    debug_mode: false
+
     # vCenter configuration
     vcenter_hostname: "vcenter.example.com"
     vcenter_username: "administrator@vsphere.local"
@@ -123,7 +126,9 @@
     - name: Debug vmkernel info structure
       debug:
         var: vmkernel_info
-      when: autolookupip | bool
+      when:
+        - autolookupip | bool
+        - debug_mode | bool
 
     - name: Extract vmk0 IP address
       set_fact:

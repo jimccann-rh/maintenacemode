@@ -287,6 +287,56 @@ until: "'SUCCESS' in ssh_check.stdout"
 - Up to 10 attempts (5 minutes)
 - Handles gradual service startup after reboot
 
+## Debug Mode
+
+Enable detailed output to see the full vmkernel adapter structure:
+
+```bash
+ansible-playbook vmware_maintenance_mode.yml \
+  --extra-vars "autolookupip=true" \
+  --extra-vars "debug_mode=true" \
+  --extra-vars '@vault.yml' \
+  --ask-vault-pass
+```
+
+**Output with debug_mode enabled:**
+```
+TASK [Debug vmkernel info structure]
+ok: [localhost] => {
+    "vmkernel_info": {
+        "changed": false,
+        "failed": false,
+        "host_vmk_info": {
+            "esxi01.example.com": [
+                {
+                    "device": "vmk0",
+                    "dhcp": false,
+                    "enable_management": true,
+                    "ipv4_address": "192.168.1.100",
+                    "ipv4_subnet_mask": "255.255.255.0",
+                    "mac": "00:50:56:xx:xx:xx",
+                    "mtu": 1500
+                },
+                {
+                    "device": "vmk1",
+                    "enable_vmotion": true,
+                    "ipv4_address": "192.168.10.100",
+                    ...
+                }
+            ]
+        }
+    }
+}
+```
+
+**When to use debug mode:**
+- vmk0 lookup fails
+- Wrong IP being extracted
+- Multiple management interfaces
+- Troubleshooting vmkernel configuration
+
+**Default:** Debug mode is **disabled** to keep output clean.
+
 ## Troubleshooting
 
 ### vmk0 Not Found
