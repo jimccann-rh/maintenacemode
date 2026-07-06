@@ -4,7 +4,8 @@ Ansible playbook for scheduled VMware ESXi host maintenance mode management with
 
 ## Features
 
-- ✅ **Prerequisite checks** - Verifies SSH and vCenter connectivity before starting
+- ✅ **Prerequisite checks** - Verifies vCenter API and SSH connectivity before starting (in that order)
+- ✅ **Auto IP lookup** - Optionally retrieves vmk0 IP from vCenter for SSH connections
 - ✅ Scheduled maintenance mode entry via vCenter API
 - ✅ VSAN data evacuation modes: `ensureAccessibility` (default) or `evacuateAllData`
 - ✅ **Optional host reboot/shutdown** - Automatically reboot or shutdown after entering maintenance mode
@@ -31,6 +32,24 @@ ansible-galaxy collection install vmware.vmware
 
 - **Ansible 2.18.x RC Warning**: If using Ansible 2.18.18rc1 or newer, you may see a warning about `community.vmware` collection compatibility. This is safe to ignore - the playbook uses the newer `vmware.vmware` collection for all operations.
 
+### SSL Certificate Validation
+
+**Default:** SSL certificate validation is **disabled** (`vcenter_validate_certs: false`)
+
+This is the default because most vCenter environments use self-signed certificates.
+
+**To enable certificate validation:**
+```yaml
+vcenter_validate_certs: true
+```
+
+Or via command line:
+```bash
+--extra-vars "vcenter_validate_certs=true"
+```
+
+**Note:** Only enable if your vCenter has a valid, trusted SSL certificate.
+
 ### Python Dependencies
 
 ```bash
@@ -46,6 +65,7 @@ Edit the variables in `vmware_maintenance_mode.yml`:
 ```yaml
 # ESXi Host
 esxi_hostname: "esxi-host.example.com"
+autolookupip: false  # Set to true to lookup vmk0 IP from vCenter for SSH
 
 # vCenter
 vcenter_hostname: "vcenter.example.com"
@@ -53,12 +73,52 @@ vcenter_username: "administrator@vsphere.local"
 vcenter_password: "{{ vault_vcenter_password }}"
 vcenter_datacenter: "Datacenter"
 vcenter_cluster: "Cluster"  # Optional
+vcenter_validate_certs: false  # Set to true if using valid SSL certificates
 
 # Scheduling
 enter_maintenance_datetime: "2026-07-06 22:00:00"  # When to enter maintenance
 post_maintenance_delay_hours: 4                     # Hours to wait after entering
 exit_maintenance_datetime: "2026-07-07 03:00:00"   # When to check for exit
 ```
+
+### Auto IP Lookup Feature
+
+By default, the playbook uses the configured `esxi_hostname` for SSH connectivity checks. However, in some environments the hostname may not be resolvable or you want to ensure SSH checks use the management IP.
+
+**Enable auto IP lookup:**
+```yaml
+autolookupip: true
+```
+
+**CLI:**
+```bash
+--extra-vars "autolookupip=true"
+```
+
+**How it works:**
+1. Connects to vCenter API
+2. Queries vmkernel adapter information for the host
+3. Extracts the IP address from vmk0 (management interface)
+4. Uses this IP for all SSH connectivity checks
+
+**Use cases:**
+- ESXi hostname not in DNS
+- Multiple network interfaces, want to ensure management IP is used
+- Hostname resolves to wrong IP
+- Testing connectivity to specific management interface
+
+**Example output with autolookupip enabled:**
+```
+✓ vCenter API connection is working
+✓ ESXi host esxi01.example.com is visible in vCenter
+
+SSH Target: 192.168.1.100
+Auto-lookup enabled: Using vmk0 IP from vCenter
+
+✓ SSH connection to 192.168.1.100:22 is working
+```
+
+**Note:** Requires vCenter API access before SSH check (checks are now ordered: vCenter first, then SSH).
 
 ### VSAN Evacuation Modes
 
@@ -310,9 +370,10 @@ ansible-playbook vmware_maintenance_mode.yml \
 ## Workflow Timeline
 
 **Pre-flight Checks (before timers start):**
-1. **SSH connectivity test** to ESXi host (30 sec timeout)
-2. **vCenter API connectivity test** (verify credentials and host visibility)
-3. **Display current host status** (connection state, maintenance mode)
+1. **vCenter API connectivity test** (verify credentials, get vCenter version)
+2. **ESXi host exists in vCenter** (verify host is in inventory)
+3. **Auto IP lookup** (if enabled, retrieves vmk0 IP from vCenter)
+4. **SSH connectivity test** to ESXi host (30 sec timeout, uses vmk0 IP if autolookupip enabled)
 
 **Scheduled Operations:**
 4. **Display wait information** (current time, scheduled start, hours/minutes to wait)
@@ -342,6 +403,18 @@ TASK [Display final status]
 ```
 
 ## Troubleshooting
+
+### vCenter Authentication Issues
+
+**Error:** "Unable to log in" or "Authentication failed"
+
+See **[TROUBLESHOOTING_AUTH.md](TROUBLESHOOTING_AUTH.md)** for complete authentication troubleshooting guide.
+
+**Quick fixes:**
+1. Verify vault.yml exists: `ansible-vault view vault.yml`
+2. Check username format: `administrator@vsphere.local` (not just `administrator`)
+3. Test credentials: `ansible-playbook test_vcenter_auth.yml --extra-vars '@vault.yml' --ask-vault-pass`
+4. Ensure using: `--extra-vars '@vault.yml'` in command
 
 ### DateTime Calculation Errors
 

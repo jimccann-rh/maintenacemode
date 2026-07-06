@@ -13,12 +13,14 @@ ansible-playbook vmware_maintenance_mode.yml \
   --extra-vars "vcenter_username=administrator@vsphere.local" \
   --extra-vars "vcenter_datacenter=DC-Production" \
   --extra-vars "vcenter_cluster=Cluster-01" \
+  --extra-vars "autolookupip=false" \
   --extra-vars "enter_maintenance_datetime='2026-07-06 22:00:00'" \
   --extra-vars "vsan_evacuation_mode=ensureObjectAccessibility" \
   --extra-vars "host_action=reboot" \
   --extra-vars "exit_maintenance_datetime='2026-07-07 03:00:00'"
 
-# Alternative host_action options:
+# Alternative options:
 # --extra-vars "host_action=none"      # No reboot/shutdown (use post_maintenance_delay_hours)
 # --extra-vars "host_action=reboot"    # Reboot host after 15 minutes in maintenance mode
 # --extra-vars "host_action=shutdown"  # Shutdown host after 15 minutes in maintenance mode
+# --extra-vars "autolookupip=true"     # Auto-lookup vmk0 IP from vCenter for SSH checks

@@ -7,13 +7,17 @@
     # VMware ESXi host configuration
     esxi_hostname: "esxi-host.example.com"
 
+    # Auto lookup IP address from vCenter
+    # When enabled, looks up vmk0 IP from vCenter and uses it for SSH checks
+    autolookupip: false
+
     # vCenter configuration
     vcenter_hostname: "vcenter.example.com"
     vcenter_username: "administrator@vsphere.local"
     vcenter_password: "{{ vault_vcenter_password }}"  # Use ansible-vault for security
     vcenter_datacenter: "Datacenter"
     vcenter_cluster: "Cluster"  # Optional: specify cluster name
-    vcenter_validate_certs: no
+    vcenter_validate_certs: false  # Set to true if using valid SSL certificates
 
     # Maintenance mode scheduling
     # Format: "YYYY-MM-DD HH:MM:SS" (24-hour format)
@@ -69,47 +73,98 @@
           - "Exit Maintenance Check: {{ exit_maintenance_datetime }}"
           - "=========================================="
 
-    - name: "PREREQUISITE CHECK: Verify SSH connectivity to ESXi host"
-      wait_for:
-        host: "{{ esxi_hostname }}"
-        port: 22
-        timeout: 30
-        state: started
-      register: ssh_precheck
+    - name: "PREREQUISITE CHECK 1: Verify vCenter API connectivity"
+      community.vmware.vmware_about_info:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+      register: vcenter_precheck
       delegate_to: localhost
-      failed_when: false
 
-    - name: Fail if SSH connection to ESXi host is not available
-      fail:
-        msg: "FAILED: Cannot connect to SSH port 22 on {{ esxi_hostname }}. Check network connectivity and SSH service status."
-      when: ssh_precheck is failed
-
-    - name: Display SSH connectivity status
+    - name: Display vCenter connectivity status
       debug:
-        msg: "✓ SSH connection to {{ esxi_hostname }}:22 is working"
+        msg:
+          - "✓ vCenter API connection to {{ vcenter_hostname }} is working"
+          - "  vCenter Version: {{ vcenter_precheck.about_info.version }}"
+          - "  Build: {{ vcenter_precheck.about_info.build }}"
 
-    - name: "PREREQUISITE CHECK: Verify vCenter API connectivity"
+    - name: "Verify ESXi host exists in vCenter"
       community.vmware.vmware_host_config_info:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
         esxi_hostname: "{{ esxi_hostname }}"
         validate_certs: "{{ vcenter_validate_certs }}"
-      register: vcenter_precheck
+      register: host_precheck
       delegate_to: localhost
-      failed_when: false
 
-    - name: Fail if vCenter connection is not available
-      fail:
-        msg: "FAILED: Cannot connect to vCenter {{ vcenter_hostname }} or host {{ esxi_hostname }} not found. Check credentials and network connectivity."
-      when: vcenter_precheck is failed
-
-    - name: Display vCenter connectivity status
+    - name: Display ESXi host status
       debug:
         msg:
-          - "✓ vCenter API connection to {{ vcenter_hostname }} is working"
-          - "✓ ESXi host {{ esxi_hostname }} is visible in vCenter"
-          - "  Host info retrieved successfully"
+          - "✓ ESXi host {{ esxi_hostname }} found in vCenter"
+          - "  Host configuration retrieved successfully"
+
+    - name: Get vmk0 IP address from vCenter (if autolookupip enabled)
+      community.vmware.vmware_vmkernel_info:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        esxi_hostname: "{{ esxi_hostname }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+      register: vmkernel_info
+      when: autolookupip | bool
+      delegate_to: localhost
+
+    - name: Debug vmkernel info structure
+      debug:
+        var: vmkernel_info
+      when: autolookupip | bool
+
+    - name: Extract vmk0 IP address
+      set_fact:
+        esxi_ssh_ip: "{{ item.ipv4_address }}"
+      when:
+        - autolookupip | bool
+        - item.device == 'vmk0'
+      loop: "{{ vmkernel_info.host_vmk_info[esxi_hostname] }}"
+      loop_control:
+        label: "{{ item.device }}"
+
+    - name: Check if vmk0 IP was found
+      fail:
+        msg: "FAILED: vmk0 interface not found or has no IP address. Disable autolookupip or check ESXi host configuration."
+      when:
+        - autolookupip | bool
+        - esxi_ssh_ip is not defined
+
+    - name: Set SSH target IP
+      set_fact:
+        esxi_ssh_target: "{{ esxi_ssh_ip | default(esxi_hostname) }}"
+
+    - name: Display SSH target information
+      debug:
+        msg:
+          - "SSH Target: {{ esxi_ssh_target }}"
+          - "{% if autolookupip | bool %}Auto-lookup enabled: Using vmk0 IP ({{ esxi_ssh_ip }}) from vCenter{% else %}Using configured hostname{% endif %}"
+      when: autolookupip | bool
+
+    - name: "PREREQUISITE CHECK 2: Verify SSH connectivity to ESXi host"
+      shell: |
+        timeout 30 bash -c "</dev/tcp/{{ esxi_ssh_target }}/22" 2>/dev/null && echo "SUCCESS" || echo "FAILED"
+      register: ssh_precheck
+      delegate_to: localhost
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if SSH connection to ESXi host is not available
+      fail:
+        msg: "FAILED: Cannot connect to SSH port 22 on {{ esxi_ssh_target }}{% if autolookupip | bool %} (vmk0 IP from vCenter){% endif %}. Check network connectivity and SSH service status."
+      when: "'FAILED' in ssh_precheck.stdout or ssh_precheck.rc != 0"
+
+    - name: Display SSH connectivity status
+      debug:
+        msg: "✓ SSH connection to {{ esxi_ssh_target }}:22 is working"
 
     - name: Display prerequisite check summary
       debug:
@@ -268,17 +323,18 @@
       delegate_to: localhost
 
     - name: Check SSH connectivity to ESXi host
-      wait_for:
-        host: "{{ esxi_hostname }}"
-        port: 22
-        timeout: "{{ ssh_check_timeout }}"
-        state: started
+      shell: |
+        timeout {{ ssh_check_timeout }} bash -c "</dev/tcp/{{ esxi_ssh_target }}/22" 2>/dev/null && echo "SUCCESS" || echo "FAILED"
       register: ssh_check
       delegate_to: localhost
+      changed_when: false
+      retries: 10
+      delay: 30
+      until: "'SUCCESS' in ssh_check.stdout"
 
     - name: Display SSH connectivity status
       debug:
-        msg: "SSH connection to {{ esxi_hostname }} is responding"
+        msg: "✓ SSH connection to {{ esxi_ssh_target }} is responding"
 
     - name: Verify host is connected in vCenter
       community.vmware.vmware_host_config_info:

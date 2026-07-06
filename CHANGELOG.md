@@ -2,6 +2,51 @@
 
 ## Latest Version - 2026-07-06
 
+### ✅ Auto IP Lookup Feature & Improved SSH Checks
+
+**New Feature**: Automatically lookup vmk0 IP address from vCenter for SSH connectivity checks.
+
+**Configuration:**
+```yaml
+autolookupip: true  # Enable auto lookup of vmk0 IP from vCenter
+```
+
+**CLI:**
+```bash
+--extra-vars "autolookupip=true"
+```
+
+**How it works:**
+1. Connects to vCenter API (prerequisite check 1)
+2. Queries vmkernel adapter info for the ESXi host
+3. Extracts vmk0 (management interface) IP address
+4. Uses this IP for all SSH connectivity checks
+
+**Use cases:**
+- ESXi hostname not resolvable in DNS
+- Multiple NICs, need to ensure management IP is used
+- Hostname points to wrong IP address
+- Testing specific management interface connectivity
+
+**SSH Check Improvements:**
+- ✅ **Proper failure detection** - SSH checks now correctly fail when port is unreachable
+- ✅ **Order changed** - vCenter API checked FIRST, then SSH (was reversed before)
+- ✅ **Better timeout handling** - Uses shell TCP check instead of wait_for for reliability
+- ✅ **Retry logic** - Post-reboot SSH check retries every 30 seconds for up to 5 minutes
+
+**Example output:**
+```
+PREREQUISITE CHECK 1: Verify vCenter API connectivity
+✓ vCenter API connection is working
+✓ ESXi host esxi01.example.com is visible in vCenter
+
+SSH Target: 192.168.1.100
+Auto-lookup enabled: Using vmk0 IP from vCenter
+
+PREREQUISITE CHECK 2: Verify SSH connectivity to ESXi host
+✓ SSH connection to 192.168.1.100:22 is working
+```
+
 ### ✅ Exit Maintenance Mode Retry Logic Added
 
 **New Feature**: Automatically retries exiting maintenance mode for up to 1 hour if the initial attempt fails.
