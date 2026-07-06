@@ -3,7 +3,11 @@
   hosts: localhost
   gather_facts: yes
   vars:
-    ansible_python_interpreter: auto_silent
+    # Python interpreter - use auto_silent or specify path
+    # If you get "Failed to import requests" error, either:
+    # 1. Install: pip3 install requests pyVmomi pyvim
+    # 2. OR override: --extra-vars "ansible_python_interpreter=/usr/bin/python3.11"
+    ansible_python_interpreter: "{{ lookup('env', 'ANSIBLE_PYTHON_INTERPRETER') | default('auto_silent', true) }}"
     # VMware ESXi host configuration
     esxi_hostname: "esxi-host.example.com"
 

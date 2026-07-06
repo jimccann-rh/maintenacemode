@@ -52,8 +52,30 @@ Or via command line:
 
 ### Python Dependencies
 
+**Check dependencies:**
 ```bash
-pip install pyVmomi pyvim
+./check_dependencies.sh
+```
+
+**Install manually:**
+```bash
+# For your Python 3.11
+pip3.11 install requests pyVmomi pyvim
+
+# OR for Python 3.13
+pip3.13 install requests pyVmomi pyvim
+
+# OR using pip3
+pip3 install requests pyVmomi pyvim
+```
+
+**System packages (alternative):**
+```bash
+# RHEL/Fedora/CentOS
+sudo dnf install python3-requests python3-pyvmomi
+
+# Ubuntu/Debian
+sudo apt install python3-requests python3-pyvmomi
 ```
 
 ## Configuration
@@ -403,6 +425,38 @@ TASK [Display final status]
 ```
 
 ## Troubleshooting
+
+### Python Dependencies Missing
+
+**Error:** "Failed to import the required Python library (requests)"
+
+**Cause:** VMware modules require `requests`, `pyVmomi`, and `pyvim` libraries, but they're not installed for the Python version Ansible is using.
+
+**Check dependencies:**
+```bash
+./check_dependencies.sh
+```
+
+**Quick fix:**
+```bash
+# Find which Python Ansible is using
+ansible --version | grep "python version"
+
+# Install for that Python version (e.g., Python 3.13)
+python3.13 -m pip install requests pyVmomi pyvim
+
+# OR force Ansible to use a different Python
+ansible-playbook vmware_maintenance_mode.yml \
+  --extra-vars "ansible_python_interpreter=/usr/bin/python3.11" \
+  --extra-vars '@vault.yml' \
+  --ask-vault-pass
+```
+
+**Permanent fix - set environment variable:**
+```bash
+export ANSIBLE_PYTHON_INTERPRETER=/usr/bin/python3.11
+ansible-playbook vmware_maintenance_mode.yml ...
+```
 
 ### vCenter Authentication Issues
 

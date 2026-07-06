@@ -1,0 +1,66 @@
+---
+# Quick test to verify vCenter authentication
+- name: Test vCenter Authentication
+  hosts: localhost
+  gather_facts: no
+  vars:
+    ansible_python_interpreter: auto_silent
+
+  tasks:
+    - name: Prompt for vCenter details
+      pause:
+        prompt: |
+          
+          Testing vCenter Authentication
+          ==============================
+          
+          This will test your vCenter credentials.
+          Press Ctrl+C to cancel, or Enter to continue.
+
+    - name: Display what we're testing with
+      debug:
+        msg:
+          - "vCenter: {{ vcenter_hostname | default('NOT SET') }}"
+          - "Username: {{ vcenter_username | default('NOT SET') }}"
+          - "Password loaded: {{ 'YES' if vcenter_password is defined else 'NO' }}"
+          - "From vault: {{ 'YES' if vault_vcenter_password is defined else 'NO' }}"
+
+    - name: Test vCenter API connection
+      community.vmware.vmware_about_info:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+      register: vcenter_test
+      delegate_to: localhost
+      failed_when: false
+
+    - name: Display success
+      debug:
+        msg:
+          - "=========================================="
+          - "✓ vCenter Authentication SUCCESSFUL"
+          - "=========================================="
+          - "vCenter Version: {{ vcenter_test.about_info.version }}"
+          - "API Version: {{ vcenter_test.about_info.apiVersion }}"
+          - "Build: {{ vcenter_test.about_info.build }}"
+          - "Full Name: {{ vcenter_test.about_info.fullName }}"
+          - "=========================================="
+      when: vcenter_test is succeeded
+
+    - name: Display failure
+      fail:
+        msg:
+          - "=========================================="
+          - "✗ vCenter Authentication FAILED"
+          - "=========================================="
+          - "Error: {{ vcenter_test.msg | default('Unknown error') }}"
+          - ""
+          - "Common issues:"
+          - "1. Wrong username format (should include @vsphere.local or @yourdomain)"
+          - "2. Wrong password in vault.yml"
+          - "3. Account locked or expired"
+          - "4. Wrong vCenter hostname"
+          - "5. Network connectivity issue"
+          - "=========================================="
+      when: vcenter_test is failed
