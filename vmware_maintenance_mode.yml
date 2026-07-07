@@ -363,7 +363,7 @@
           - "Checking if host is powered on and accessible"
           - "=========================================="
           - "Note: If you used host_action=shutdown, power on the host manually before this time"
-          - "SSH connectivity check will retry for up to {{ (ssh_check_timeout / 60) | int }} minutes"
+          - "SSH connectivity check will retry for up to {{ (ssh_check_timeout | int / 60) | int }} minutes"
           - "=========================================="
 
     - name: Add ESXi host to inventory for SSH check
