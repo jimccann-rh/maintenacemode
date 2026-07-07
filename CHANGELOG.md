@@ -1,6 +1,133 @@
 # Changelog
 
-## Latest Version - 2026-07-06
+## Latest Version - 2026-07-07
+
+### ✨ Added: Post-Reboot/Shutdown Delay Period
+
+**New Feature**: After reboot/shutdown, the playbook waits for `post_maintenance_delay_hours` before checking exit time.
+
+**Timeline:**
+1. Enter maintenance mode
+2. Wait `host_action_delay` (default: 15 min)
+3. Reboot/shutdown host
+4. **NEW:** Wait `post_maintenance_delay` (default: 300s = 5 minutes) for reboot/shutdown to complete
+5. Check if `exit_maintenance_datetime` has arrived (wait if needed)
+6. Wait for SSH to respond (up to `ssh_check_timeout`, default: 15 min)
+7. Wait `host_action_delay` (default: 15 min) for services to stabilize
+8. Verify vCenter connection
+9. Exit maintenance mode
+
+**Use cases:**
+- **Firmware updates**: May take 30-60 minutes to flash and reboot
+- **BIOS updates**: Can take 15-30 minutes
+- **Hardware diagnostics**: POST checks and storage controller initialization
+- **Scheduled downtime windows**: Align with maintenance windows
+
+**What you'll see:**
+```
+TASK [Reboot ESXi host via vCenter]
+changed: [localhost]
+
+TASK [Display post-reboot delay information]
+ok: [localhost] => {
+    "msg": [
+        "==========================================",
+        "Post-Reboot/Shutdown Delay",
+        "==========================================",
+        "Action taken: REBOOT",
+        "Waiting 5 minutes (300 seconds)",
+        "This allows time for the host to complete the reboot",
+        "=========================================="
+    ]
+}
+
+TASK [Wait 5 minutes after reboot]  # Shows actual post_maintenance_delay value
+Pausing for 300 seconds (5 minutes)...
+
+# If you set post_maintenance_delay=900, you'll see:
+TASK [Wait 15 minutes after reboot]
+Pausing for 900 seconds (15 minutes)...
+```
+
+**Configuration:**
+```yaml
+post_maintenance_delay: 300  # Default: 5 minutes (in seconds)
+```
+
+**Override:**
+```bash
+# Quick reboot (default)
+--extra-vars "post_maintenance_delay=300"  # 5 minutes (DEFAULT)
+
+# Medium delay 
+--extra-vars "post_maintenance_delay=900"  # 15 minutes
+
+# Long delay 
+--extra-vars "post_maintenance_delay=1800"  # 30 minutes
+
+# Firmware updates
+--extra-vars "post_maintenance_delay=3600"  # 60 minutes (1 hour)
+
+# Very long maintenance windows
+--extra-vars "post_maintenance_delay=14400"  # 240 minutes (4 hours)
+```
+
+### ✨ Added: Post-Reboot Stabilization Delay
+
+**New Feature**: After reboot/shutdown, the playbook now waits for `host_action_delay` again to allow ESXi services to fully start.
+
+**Timeline:**
+1. Enter maintenance mode
+2. Wait `host_action_delay` (default: 15 min)
+3. Reboot/shutdown host
+4. Wait for SSH to respond (up to `ssh_check_timeout`, default: 15 min)
+5. **NEW:** Wait `host_action_delay` (default: 15 min) for services to stabilize
+6. Verify vCenter connection
+7. Exit maintenance mode
+
+**Why this is needed:**
+- SSH responding ≠ host ready
+- VMware services (hostd, vpxa) need time to start
+- Storage devices need to be scanned
+- Network interfaces need to fully initialize
+- vCenter connection needs to establish
+
+**What you'll see:**
+```
+TASK [Display SSH connectivity status]
+ok: [localhost] => {
+    "msg": "✓ SSH connection to 10.184.15.164 is available and responding (after 2 attempts)"
+}
+
+TASK [Display post-reboot stabilization delay]
+ok: [localhost] => {
+    "msg": [
+        "==========================================",
+        "Waiting for ESXi Host to Stabilize After REBOOT",
+        "==========================================",
+        "SSH is responding, but host services need time to fully start",
+        "Waiting 15 minutes for:",
+        "  - VMware services to start (hostd, vpxa)",
+        "  - Storage devices to be scanned",
+        "  - Network interfaces to come up",
+        "  - vCenter connection to establish",
+        "=========================================="
+    ]
+}
+
+TASK [Wait 15 minutes for host to fully stabilize after reboot]
+# Waits 15 minutes...
+```
+
+**Configuration:**
+Uses the same `host_action_delay` variable (default: 900 seconds = 15 minutes).
+
+**Override:**
+```bash
+--extra-vars "host_action_delay=600"  # 10 minutes before AND after reboot
+```
+
+## Previous Updates - 2026-07-06
 
 ### ✨ Improved: Dynamic Task Names
 
@@ -49,35 +176,23 @@ timeout 10 bash -c "</dev/tcp/10.184.15.207/22"
 # Returns SUCCESS even if host is OFF but firewall responds!
 ```
 
-**NEW (FIXED) CHECK - Uses Ansible Native Module:**
-```yaml
-# Add ESXi host to inventory dynamically
-- name: Add ESXi host to inventory for SSH check
-  ansible.builtin.add_host:
-    name: esxi_temp_host
-    ansible_host: "{{ esxi_ssh_target }}"
-    ansible_user: root
-
-# Check SSH connection using wait_for_connection
-- name: Wait for SSH connection to ESXi host
-  ansible.builtin.wait_for_connection:
-    delay: 30              # Wait 30s before first attempt
-    timeout: 900           # Total timeout: 15 minutes (configurable via ssh_check_timeout)
-    sleep: 30              # Wait 30s between attempts
-    connect_timeout: 10    # 10s timeout per connection attempt
-  delegate_to: esxi_temp_host
+**NEW (FIXED) CHECK - SSH Protocol Check (ESXi Compatible):**
+```bash
+# Check SSH service responds with authentication-related message
+ssh -o ConnectTimeout=10 -o BatchMode=yes root@HOST exit 2>&1 | \
+  grep -qE "Host key verification failed|Permission denied|password:"
+# Returns SUCCESS if SSH service responds
+# Returns FAILED if: "Connection timed out", "Connection refused", etc.
 ```
 
-**Why wait_for_connection is better:**
-- ✅ Uses Ansible's actual SSH connection mechanism (not just port checks)
-- ✅ Tests full SSH handshake, not just port availability
-- ✅ Built-in retry logic with configurable delays
-- ✅ No shell scripting required
-- ✅ Standard Ansible best practice for SSH checks after reboots
-- ✅ Properly fails if host is unreachable (unlike TCP port checks)
-- ✅ Default 15 minute timeout allows for slow ESXi boots
+**Why this approach:**
+- ✅ Tests actual SSH protocol handshake (not just port open)
+- ✅ Works with ESXi (doesn't require Python on remote host)
+- ✅ Configurable retry logic with ssh_check_timeout (default: 15 minutes)
+- ✅ Detects real SSH service vs port forwarding/firewall
+- ✅ Properly fails when host is down or unreachable
 
-**Reference:** [Ansible wait_for_connection documentation](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/wait_for_connection_module.html)
+**Note:** Cannot use `wait_for_connection` because ESXi doesn't have Python installed, which Ansible's connection plugins require.
 
 **Real-world test results:**
 ```bash
