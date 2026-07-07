@@ -49,13 +49,35 @@ timeout 10 bash -c "</dev/tcp/10.184.15.207/22"
 # Returns SUCCESS even if host is OFF but firewall responds!
 ```
 
-**NEW (FIXED) CHECK:**
-```bash
-ssh -o ConnectTimeout=10 -o BatchMode=yes HOST exit 2>&1 | \
-  grep -qE "Host key verification failed|Permission denied|password:"
-# Returns SUCCESS if SSH service responds with authentication-related message
-# Returns FAILED if: "Connection timed out", "Connection refused", etc.
+**NEW (FIXED) CHECK - Uses Ansible Native Module:**
+```yaml
+# Add ESXi host to inventory dynamically
+- name: Add ESXi host to inventory for SSH check
+  ansible.builtin.add_host:
+    name: esxi_temp_host
+    ansible_host: "{{ esxi_ssh_target }}"
+    ansible_user: root
+
+# Check SSH connection using wait_for_connection
+- name: Wait for SSH connection to ESXi host
+  ansible.builtin.wait_for_connection:
+    delay: 30              # Wait 30s before first attempt
+    timeout: 900           # Total timeout: 15 minutes (configurable via ssh_check_timeout)
+    sleep: 30              # Wait 30s between attempts
+    connect_timeout: 10    # 10s timeout per connection attempt
+  delegate_to: esxi_temp_host
 ```
+
+**Why wait_for_connection is better:**
+- ✅ Uses Ansible's actual SSH connection mechanism (not just port checks)
+- ✅ Tests full SSH handshake, not just port availability
+- ✅ Built-in retry logic with configurable delays
+- ✅ No shell scripting required
+- ✅ Standard Ansible best practice for SSH checks after reboots
+- ✅ Properly fails if host is unreachable (unlike TCP port checks)
+- ✅ Default 15 minute timeout allows for slow ESXi boots
+
+**Reference:** [Ansible wait_for_connection documentation](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/wait_for_connection_module.html)
 
 **Real-world test results:**
 ```bash

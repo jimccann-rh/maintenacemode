@@ -55,7 +55,7 @@
     exit_maintenance_datetime: "2026-07-07 03:00:00"
 
     # Timeouts and retries
-    ssh_check_timeout: 300  # seconds
+    ssh_check_timeout: 900  # 15 minutes in seconds
     vcenter_check_timeout: 600  # seconds
     vcenter_reconnect_delay: 900  # 15 minutes in seconds
     exit_maintenance_retry_timeout: 3600  # 1 hour retry window for exiting maintenance mode
@@ -366,43 +366,43 @@
           - "SSH connectivity check will retry for up to {{ (ssh_check_timeout / 60) | int }} minutes"
           - "=========================================="
 
-    - name: Check SSH connectivity to ESXi host (with retries)
-      shell: |
-        # Check if SSH service responds - look for auth-related responses (not timeouts/refused)
-        timeout 10 ssh -o ConnectTimeout=10 -o BatchMode=yes {{ esxi_ssh_target }} exit 2>&1 | grep -qE "Host key verification failed|Permission denied|password:" && echo "SUCCESS" || echo "FAILED"
-      register: ssh_check
-      delegate_to: localhost
-      changed_when: false
-      retries: 10
-      delay: 30
-      until: "'SUCCESS' in ssh_check.stdout"
+    - name: Add ESXi host to inventory for SSH check
+      ansible.builtin.add_host:
+        name: esxi_temp_host
+        ansible_host: "{{ esxi_ssh_target }}"
+        ansible_user: root
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+        ansible_connection: ssh
+
+    - name: Wait for SSH connection to ESXi host
+      ansible.builtin.wait_for_connection:
+        delay: 30
+        timeout: "{{ ssh_check_timeout }}"
+        sleep: 30
+        connect_timeout: 10
+      delegate_to: esxi_temp_host
+      register: ssh_connection_check
       ignore_errors: yes
 
-    - name: Debug SSH check output
-      debug:
-        var: ssh_check
-      when:
-        - debug_mode | bool
-        - "'SUCCESS' not in ssh_check.stdout"
-
-    - name: Fail if SSH never became available
+    - name: Fail if SSH connection never became available
       fail:
         msg: |
-          FAILED: SSH on {{ esxi_ssh_target }} did not become available after {{ ssh_check.attempts | default(10) }} attempts ({{ (ssh_check.attempts | default(10) * 30 / 60) | int }} minutes).
+          FAILED: SSH connection to {{ esxi_ssh_target }} did not become available within {{ (ssh_check_timeout | int / 60) | int }} minutes.
 
           Possible causes:
           - Host is still powered off (power it on manually if you used host_action=shutdown)
-          - Host is booting (wait longer)
+          - Host is booting (ESXi boot can take 5-10 minutes)
           - Network connectivity issue
           - SSH service not running on ESXi host
+          - Firewall blocking SSH connections
 
-          Last check output: {{ ssh_check.stdout | default('No output') }}
-      when: "'SUCCESS' not in ssh_check.stdout"
+          Try increasing ssh_check_timeout if host needs more time to boot.
+      when: ssh_connection_check is failed
 
     - name: Display SSH connectivity status
       debug:
-        msg: "✓ SSH service on {{ esxi_ssh_target }} is responding (after {{ ssh_check.attempts | default(1) }} attempts)"
-      when: "'SUCCESS' in ssh_check.stdout"
+        msg: "✓ SSH connection to {{ esxi_ssh_target }} is available and responding"
+      when: ssh_connection_check is succeeded
 
     - name: Verify host is connected in vCenter
       community.vmware.vmware_host_config_info:

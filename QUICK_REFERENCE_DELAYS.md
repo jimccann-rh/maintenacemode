@@ -11,7 +11,7 @@ The playbook has several configurable delay periods. Here's a quick reference fo
 | `host_action_delay` | 900s (15min) | Wait after entering maintenance before reboot/shutdown | Reduce for testing |
 | `vcenter_reconnect_delay` | 900s (15min) | Wait after reconnection before exiting maintenance | Reduce for small environments |
 | `post_maintenance_delay_hours` | 4 hours | Wait in maintenance (when `host_action=none`) | Adjust based on maintenance window |
-| `ssh_check_timeout` | 300s (5min) | How long to wait for SSH port to respond | Increase for slow boots |
+| `ssh_check_timeout` | 900s (15min) | How long to wait for SSH connection | Increase for very slow boots |
 | `exit_maintenance_retry_timeout` | 3600s (60min) | How long to retry exiting maintenance | Increase for large VSAN clusters |
 | `exit_maintenance_retry_delay` | 60s | Time between exit retry attempts | Reduce for faster retries |
 
@@ -173,7 +173,7 @@ exit_maintenance_retry_timeout=10800  # 3 hours
 ```bash
 host_action_delay=900             # 15 minutes
 vcenter_reconnect_delay=1800      # 30 minutes (longer for services)
-ssh_check_timeout=600             # 10 minutes (slower boot)
+ssh_check_timeout=900             # 15 minutes (DEFAULT - slower boot)
 ```
 
 ## All Variables in One Command
