@@ -214,6 +214,39 @@ host_action: "shutdown"  # Shutdown the host after 15 minutes
 host_action_delay: 900  # 15 minutes (in seconds)
 ```
 
+### Stabilization Delay Before Exit
+
+After the host reconnects to vCenter, the playbook waits for services to stabilize before exiting maintenance mode.
+
+**Default: 15 minutes (900 seconds)**
+
+```yaml
+vcenter_reconnect_delay: 900  # 15 minutes
+```
+
+**Change to 5 minutes:**
+```yaml
+vcenter_reconnect_delay: 300  # 5 minutes
+```
+
+**Via CLI:**
+```bash
+--extra-vars "vcenter_reconnect_delay=300"   # 5 minutes
+--extra-vars "vcenter_reconnect_delay=600"   # 10 minutes
+--extra-vars "vcenter_reconnect_delay=1800"  # 30 minutes
+```
+
+**Why this delay exists:**
+- HA/DRS services need time to initialize
+- vCenter inventory needs to sync
+- Performance metrics need to start collecting
+- VSAN health checks need to run
+
+**When to adjust:**
+- **Reduce to 5 minutes** - Small environment, non-production, testing
+- **Keep at 15 minutes** - Production environments (recommended)
+- **Increase to 30 minutes** - Large clusters, VSAN environments, post-firmware updates
+
 ### Exit Maintenance Mode Retry Logic
 
 The playbook automatically retries exiting maintenance mode for up to 1 hour after the scheduled exit window.

@@ -75,9 +75,10 @@
           - "Enter Maintenance: {{ enter_maintenance_datetime }}"
           - "VSAN Evacuation Mode: {{ vsan_evacuation_mode }}"
           - "Host Action: {{ host_action | upper }}"
-          - "{% if host_action != 'none' %}Host Action Delay: {{ host_action_delay }} seconds ({{ (host_action_delay / 60) | int }} minutes){% endif %}"
+          - "{% if host_action != 'none' %}Host Action Delay: {{ host_action_delay }} seconds ({{ (host_action_delay | int / 60) | int }} minutes){% endif %}"
           - "{% if host_action == 'none' %}Post-Maintenance Delay: {{ post_maintenance_delay_hours }} hours{% endif %}"
           - "Exit Maintenance Check: {{ exit_maintenance_datetime }}"
+          - "Stabilization Delay Before Exit: {{ vcenter_reconnect_delay }} seconds ({{ (vcenter_reconnect_delay | int / 60) | int }} minutes)"
           - "=========================================="
 
     - name: "PREREQUISITE CHECK 1: Verify vCenter API connectivity"
@@ -355,19 +356,53 @@
       when: seconds_until_exit_check | int > 0
       delegate_to: localhost
 
-    - name: Check SSH connectivity to ESXi host
+    - name: Wait for host to power on (if host_action was shutdown)
+      debug:
+        msg:
+          - "=========================================="
+          - "Checking if host is powered on and accessible"
+          - "=========================================="
+          - "Note: If you used host_action=shutdown, power on the host manually before this time"
+          - "SSH connectivity check will retry for up to {{ (ssh_check_timeout / 60) | int }} minutes"
+          - "=========================================="
+
+    - name: Check SSH connectivity to ESXi host (with retries)
       shell: |
-        timeout {{ ssh_check_timeout }} bash -c "</dev/tcp/{{ esxi_ssh_target }}/22" 2>/dev/null && echo "SUCCESS" || echo "FAILED"
+        # Check if SSH service responds - look for auth-related responses (not timeouts/refused)
+        timeout 10 ssh -o ConnectTimeout=10 -o BatchMode=yes {{ esxi_ssh_target }} exit 2>&1 | grep -qE "Host key verification failed|Permission denied|password:" && echo "SUCCESS" || echo "FAILED"
       register: ssh_check
       delegate_to: localhost
       changed_when: false
       retries: 10
       delay: 30
       until: "'SUCCESS' in ssh_check.stdout"
+      ignore_errors: yes
+
+    - name: Debug SSH check output
+      debug:
+        var: ssh_check
+      when:
+        - debug_mode | bool
+        - "'SUCCESS' not in ssh_check.stdout"
+
+    - name: Fail if SSH never became available
+      fail:
+        msg: |
+          FAILED: SSH on {{ esxi_ssh_target }} did not become available after {{ ssh_check.attempts | default(10) }} attempts ({{ (ssh_check.attempts | default(10) * 30 / 60) | int }} minutes).
+
+          Possible causes:
+          - Host is still powered off (power it on manually if you used host_action=shutdown)
+          - Host is booting (wait longer)
+          - Network connectivity issue
+          - SSH service not running on ESXi host
+
+          Last check output: {{ ssh_check.stdout | default('No output') }}
+      when: "'SUCCESS' not in ssh_check.stdout"
 
     - name: Display SSH connectivity status
       debug:
-        msg: "✓ SSH connection to {{ esxi_ssh_target }} is responding"
+        msg: "✓ SSH service on {{ esxi_ssh_target }} is responding (after {{ ssh_check.attempts | default(1) }} attempts)"
+      when: "'SUCCESS' in ssh_check.stdout"
 
     - name: Verify host is connected in vCenter
       community.vmware.vmware_host_config_info:
@@ -388,7 +423,7 @@
           - "Host {{ esxi_hostname }} is connected to vCenter"
           - "Host configuration retrieved successfully"
 
-    - name: Wait 15 minutes before exiting maintenance mode
+    - name: "Wait {{ (vcenter_reconnect_delay | int / 60) | int }} minutes before exiting maintenance mode"
       wait_for:
         timeout: "{{ vcenter_reconnect_delay }}"
       delegate_to: localhost
@@ -404,7 +439,7 @@
           - "=========================================="
           - "Attempting to Exit Maintenance Mode"
           - "=========================================="
-          - "Retry Window: {{ exit_maintenance_retry_timeout }} seconds ({{ (exit_maintenance_retry_timeout / 60) | int }} minutes)"
+          - "Retry Window: {{ exit_maintenance_retry_timeout }} seconds ({{ (exit_maintenance_retry_timeout | int / 60) | int }} minutes)"
           - "Retry Interval: {{ exit_maintenance_retry_delay }} seconds"
           - "Deadline: {{ exit_maintenance_deadline_epoch }}"
           - "=========================================="
@@ -434,7 +469,7 @@
 
     - name: Fail if unable to exit maintenance mode
       fail:
-        msg: "FAILED: Unable to exit maintenance mode after {{ exit_maintenance_retry_timeout }} seconds ({{ (exit_maintenance_retry_timeout / 60) | int }} minutes) of retrying."
+        msg: "FAILED: Unable to exit maintenance mode after {{ exit_maintenance_retry_timeout }} seconds ({{ (exit_maintenance_retry_timeout | int / 60) | int }} minutes) of retrying."
       when: exit_maintenance_result is failed
 
     - name: Verify maintenance mode exit

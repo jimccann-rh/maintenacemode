@@ -2,6 +2,122 @@
 
 ## Latest Version - 2026-07-06
 
+### ✨ Improved: Dynamic Task Names
+
+**Enhancement**: Task names now show actual configured values instead of hardcoded text.
+
+**Before:**
+```
+TASK [Wait 15 minutes before exiting maintenance mode]
+```
+
+**After:**
+```
+TASK [Wait 15 minutes before exiting maintenance mode]  # Shows actual vcenter_reconnect_delay value
+TASK [Wait 10 minutes before exiting maintenance mode]  # If you set vcenter_reconnect_delay=600
+TASK [Wait 30 minutes before exiting maintenance mode]  # If you set vcenter_reconnect_delay=1800
+```
+
+**Implementation:**
+```yaml
+# Dynamic task name based on actual variable
+- name: "Wait {{ (vcenter_reconnect_delay | int / 60) | int }} minutes before exiting maintenance mode"
+```
+
+**CLI override:**
+```bash
+--extra-vars "vcenter_reconnect_delay=1800"  # 30 minutes
+```
+
+### 🐛 Fixed: SSH Check False Positive (CRITICAL)
+
+**Critical Bug Fix**: SSH check was showing success even when host was powered off.
+
+**Problem #1 - No failure handling:**
+- Task had `retries` and `until` but no `failed_when`
+- When all retries exhausted, task showed "ok" instead of failing
+
+**Problem #2 - TCP check not sufficient:**
+- TCP port check (`</dev/tcp/IP/22`) only verifies something is listening
+- Doesn't verify it's actually SSH from the ESXi host
+- Could be a firewall, load balancer, or proxy responding
+- Host could be powered off but network device responds on port 22
+
+**OLD (BROKEN) CHECK:**
+```bash
+timeout 10 bash -c "</dev/tcp/10.184.15.207/22"
+# Returns SUCCESS even if host is OFF but firewall responds!
+```
+
+**NEW (FIXED) CHECK:**
+```bash
+ssh -o ConnectTimeout=10 -o BatchMode=yes HOST exit 2>&1 | \
+  grep -qE "Host key verification failed|Permission denied|password:"
+# Returns SUCCESS if SSH service responds with authentication-related message
+# Returns FAILED if: "Connection timed out", "Connection refused", etc.
+```
+
+**Real-world test results:**
+```bash
+# Host powered OFF:
+$ ssh -o ConnectTimeout=10 -o BatchMode=yes 10.184.15.207 exit
+Connection timed out during banner exchange
+→ Check returns: FAILED ✓
+
+# Host powered ON:
+$ ssh -o ConnectTimeout=10 -o BatchMode=yes 10.184.15.164 exit  
+Host key verification failed
+→ Check returns: SUCCESS ✓
+```
+
+**Problem:**
+- Task had `retries` and `until` but no `failed_when`
+- When all retries exhausted, task showed "ok" instead of failing
+- Playbook continued even though host was unreachable
+
+**Solution:**
+```yaml
+- name: Check SSH connectivity (with retries)
+  until: "'SUCCESS' in ssh_check.stdout"
+  ignore_errors: yes
+
+- name: Fail if SSH never became available
+  fail:
+    msg: "SSH did not become available after 10 attempts"
+  when: "'SUCCESS' not in ssh_check.stdout"
+```
+
+**Now shows:**
+- Number of attempts made
+- Clear failure if host never responds
+- Helpful message if host is still powered off
+
+### 🐛 Fixed: String to Int Conversion in Templates
+
+**Bug Fix**: Templates failed when numeric variables were passed via `--extra-vars` as strings.
+
+**Problem:**
+```bash
+--extra-vars "host_action_delay=60"  # Comes in as string "60"
+Template: {{ host_action_delay / 60 }}  # FAILS: str / int
+Error: unsupported operand type(s) for /: 'str' and 'int'
+```
+
+**Solution:**
+Convert to int before division:
+```yaml
+# OLD (BROKEN)
+{{ host_action_delay / 60 }}
+
+# NEW (FIXED)
+{{ host_action_delay | int / 60 }}
+```
+
+**Fixed templates:**
+- ✅ Host action delay display
+- ✅ Exit maintenance retry timeout display
+- ✅ Exit maintenance retry failure message
+
 ### 🐛 Fixed: Stale Time Calculation Bug
 
 **Critical Bug Fix**: Wait time calculations were using stale timestamps from the beginning of playbook execution.
