@@ -2,6 +2,60 @@
 
 ## Latest Version - 2026-07-06
 
+### 🐛 Fixed: Stale Time Calculation Bug
+
+**Critical Bug Fix**: Wait time calculations were using stale timestamps from the beginning of playbook execution.
+
+**Problem:**
+- `ansible_date_time` is captured when `gather_facts` runs at playbook start
+- After hours of running (entering maintenance, delays, etc.), the cached time was stale
+- Exit check would calculate wait time based on old timestamp
+- Resulted in waiting for already-passed times or incorrect durations
+
+**Example of the bug:**
+```
+Playbook started: 2026-07-06 16:00:00
+Enter maintenance: 2026-07-06 18:00:00 (2 hour wait)
+Post-maintenance delay: 4 hours
+Exit check scheduled: 2026-07-07 04:00:00
+
+Current actual time: 2026-07-07 09:00:00 (5 hours past exit time!)
+But ansible_date_time.epoch still says: 2026-07-06 16:00:00
+Calculated wait: 11.78 hours (WRONG!)
+```
+
+**Solution:**
+- Get fresh current time with `date +%s` before each wait calculation
+- Use `lookup('pipe', 'date')` for display timestamps
+- Added warning when scheduled time has already passed
+- Skip wait if time is in the past
+
+**Changes made:**
+```yaml
+# OLD (BROKEN)
+seconds_until_exit_check: "{{ target_epoch - ansible_date_time.epoch }}"
+
+# NEW (FIXED)
+- name: Get current epoch time (refresh for accurate calculation)
+  shell: date +%s
+  register: current_epoch_exit
+
+- name: Calculate seconds until exit check time
+  set_fact:
+    seconds_until_exit_check: "{{ target_epoch - current_epoch_exit.stdout }}"
+```
+
+**Affected wait points:**
+1. ✅ Wait for scheduled maintenance entry time
+2. ✅ Wait for scheduled exit check time
+
+**New behavior:**
+- Shows warning if scheduled time has already passed
+- Skips wait and proceeds immediately if time is past
+- Always uses fresh current time for calculations
+
+## Previous Updates - 2026-07-06
+
 ### ✅ Auto IP Lookup Feature & Improved SSH Checks
 
 **New Feature**: Automatically lookup vmk0 IP address from vCenter for SSH connectivity checks.

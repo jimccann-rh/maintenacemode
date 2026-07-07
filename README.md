@@ -409,8 +409,8 @@ ansible-playbook vmware_maintenance_mode.yml \
 4. **SSH connectivity test** to ESXi host (30 sec timeout, uses vmk0 IP if autolookupip enabled)
 
 **Scheduled Operations:**
-4. **Display wait information** (current time, scheduled start, hours/minutes to wait)
-5. **Wait for scheduled start time** → Enter maintenance mode
+4. **Display wait information** (current time refreshed, scheduled start, hours/minutes to wait)
+5. **Wait for scheduled start time** → Enter maintenance mode (skips if time passed)
 6. **15-minute delay** (if host_action is set)
 7. **Reboot or Shutdown host** (if host_action is "reboot" or "shutdown")
 8. **Post-maintenance delay** (configurable hours, only if host_action is "none")

@@ -183,14 +183,21 @@
           - "✓ Ready to begin scheduled maintenance"
           - "=========================================="
 
+    - name: Get current epoch time (for accurate wait calculation)
+      shell: date +%s
+      register: current_epoch_start
+      delegate_to: localhost
+      changed_when: false
+
     - name: Convert maintenance start time to epoch
       shell: date -d "{{ enter_maintenance_datetime }}" +%s
       register: maintenance_start_epoch
       delegate_to: localhost
+      changed_when: false
 
     - name: Calculate seconds until maintenance mode entry
       set_fact:
-        seconds_until_maintenance: "{{ (maintenance_start_epoch.stdout | int) - (ansible_date_time.epoch | int) }}"
+        seconds_until_maintenance: "{{ (maintenance_start_epoch.stdout | int) - (current_epoch_start.stdout | int) }}"
 
     - name: Display wait information
       debug:
@@ -198,13 +205,18 @@
           - "=========================================="
           - "Waiting for Scheduled Maintenance Time"
           - "=========================================="
-          - "Current Time: {{ ansible_date_time.date }} {{ ansible_date_time.time }}"
+          - "Current Time: {{ lookup('pipe', 'date +\"%Y-%m-%d %H:%M:%S\"') }}"
           - "Scheduled Start: {{ enter_maintenance_datetime }}"
           - "Seconds to Wait: {{ seconds_until_maintenance }}"
           - "Hours to Wait: {{ (seconds_until_maintenance | int / 3600) | round(2) }}"
           - "Minutes to Wait: {{ (seconds_until_maintenance | int / 60) | round(0) }}"
+          - "{% if seconds_until_maintenance | int < 0 %}WARNING: Scheduled time has already passed!{% endif %}"
           - "=========================================="
-      when: seconds_until_maintenance | int > 0
+
+    - name: Skip wait if time already passed
+      debug:
+        msg: "Scheduled maintenance time already passed. Entering maintenance mode immediately."
+      when: seconds_until_maintenance | int <= 0
 
     - name: Wait until scheduled maintenance time
       wait_for:
@@ -302,14 +314,21 @@
       when: host_action == "none"
       delegate_to: localhost
 
+    - name: Get current epoch time (refresh for accurate calculation)
+      shell: date +%s
+      register: current_epoch_exit
+      delegate_to: localhost
+      changed_when: false
+
     - name: Convert exit check time to epoch
       shell: date -d "{{ exit_maintenance_datetime }}" +%s
       register: exit_check_epoch
       delegate_to: localhost
+      changed_when: false
 
     - name: Calculate seconds until exit check time
       set_fact:
-        seconds_until_exit_check: "{{ (exit_check_epoch.stdout | int) - (ansible_date_time.epoch | int) }}"
+        seconds_until_exit_check: "{{ (exit_check_epoch.stdout | int) - (current_epoch_exit.stdout | int) }}"
 
     - name: Display exit check wait information
       debug:
@@ -317,13 +336,18 @@
           - "=========================================="
           - "Waiting for Scheduled Exit Check Time"
           - "=========================================="
-          - "Current Time: {{ ansible_date_time.date }} {{ ansible_date_time.time }}"
+          - "Current Time: {{ lookup('pipe', 'date +\"%Y-%m-%d %H:%M:%S\"') }}"
           - "Scheduled Exit Check: {{ exit_maintenance_datetime }}"
           - "Seconds to Wait: {{ seconds_until_exit_check }}"
           - "Hours to Wait: {{ (seconds_until_exit_check | int / 3600) | round(2) }}"
           - "Minutes to Wait: {{ (seconds_until_exit_check | int / 60) | round(0) }}"
+          - "{% if seconds_until_exit_check | int < 0 %}WARNING: Scheduled time has already passed!{% endif %}"
           - "=========================================="
-      when: seconds_until_exit_check | int > 0
+
+    - name: Skip wait if time already passed
+      debug:
+        msg: "Scheduled exit time already passed. Proceeding immediately to SSH checks."
+      when: seconds_until_exit_check | int <= 0
 
     - name: Wait until scheduled exit check time
       wait_for:
