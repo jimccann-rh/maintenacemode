@@ -63,6 +63,10 @@
     exit_maintenance_retry_delay: 60  # seconds between retry attempts
 
   tasks:
+    - name: Record playbook start time
+      set_fact:
+        playbook_start_epoch: "{{ ansible_date_time.epoch }}"
+
     - name: Display configuration
       debug:
         msg:
@@ -535,6 +539,18 @@
       debug:
         msg: "Host {{ esxi_hostname }} successfully exited maintenance mode at {{ ansible_date_time.iso8601 }}"
 
+    - name: Calculate total runtime
+      shell: date +%s
+      register: playbook_end_epoch
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Set runtime facts
+      set_fact:
+        total_runtime_seconds: "{{ (playbook_end_epoch.stdout | int) - (playbook_start_epoch | int) }}"
+        total_runtime_minutes: "{{ ((playbook_end_epoch.stdout | int) - (playbook_start_epoch | int)) / 60 | int }}"
+        total_runtime_hours: "{{ ((playbook_end_epoch.stdout | int) - (playbook_start_epoch | int)) / 3600 | round(2) }}"
+
     - name: Send completion notification
       debug:
         msg:
@@ -543,6 +559,6 @@
           - "=========================================="
           - "Host: {{ esxi_hostname }}"
           - "Entered Maintenance: {{ enter_maintenance_datetime }}"
-          - "Exited Maintenance: {{ ansible_date_time.iso8601 }}"
+          - "Exited Maintenance: {{ lookup('pipe', 'date +\"%Y-%m-%d %H:%M:%S\"') }}"
           - "Evacuation Mode Used: {{ vsan_evacuation_mode }}"
-          - "Total Runtime: Check logs for duration"
+          - "Total Runtime: {{ total_runtime_hours }} hours ({{ total_runtime_minutes }} minutes / {{ total_runtime_seconds }} seconds)"
