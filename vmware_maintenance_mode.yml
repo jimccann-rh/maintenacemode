@@ -239,7 +239,7 @@
         enable_maintenance_mode: true
         vsan_compliance_mode: "{{ vsan_evacuation_mode }}"
         evacuate: yes
-        timeout: 3600
+        timeout: 14400
         validate_certs: "{{ vcenter_validate_certs }}"
       register: enter_maintenance_result
       delegate_to: localhost
@@ -501,7 +501,7 @@
         password: "{{ vcenter_password }}"
         esxi_host_name: "{{ esxi_hostname }}"
         enable_maintenance_mode: false
-        timeout: 3600
+        timeout: 14400
         validate_certs: "{{ vcenter_validate_certs }}"
       register: exit_maintenance_result
       delegate_to: localhost
